@@ -28,6 +28,7 @@ const authReady = new Promise((resolve) => {
 const PAGES_DISPO = [
   { id: "dashboard",    label: "Dashboard" },
   { id: "tracker",      label: "Tracker" },
+  { id: "quotas",       label: "Quotas" },
   { id: "taxes",        label: "Taxes" },
   { id: "paye",         label: "Paye" },
   { id: "blanchiment",  label: "Blanchiment" },

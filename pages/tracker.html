@@ -13,7 +13,7 @@
 <script src="../js/firebase-config.js"></script>
 <script src="../js/app.js"></script>
 <script>
-let SEM_ID = null, SEMAINE = null, ACTIONS_DISPO = {}, MEMBRES = {}, TOUTES_ACTIONS = {};
+let SEM_ID = null, SEMAINE = null, ACTIONS_DISPO = {}, MEMBRES = {}, TOUTES_ACTIONS = {}, QUOTAS_CAT = {};
 
 async function boot() {
   const session = await initShell("tracker");
@@ -50,6 +50,10 @@ async function boot() {
           <label>Coéquipiers (Fleeca — ne comptent pas dans leurs stats)</label>
           <select id="fCoequipiers" multiple style="height:90px;"></select>
         </div>
+        <div id="drogueZone" class="field" style="display:none;">
+          <label>Drogue vendue</label>
+          <select id="fProduit"></select>
+        </div>
         <div class="field">
           <label>Groupe (optionnel)</label>
           <input type="text" id="fGroupe" placeholder="Nom du groupe payé"/>
@@ -83,14 +87,15 @@ async function boot() {
     </div>
   `;
 
-  const [membresSnap, actionsDispoSnap, cfgSnap] = await Promise.all([
-    db.ref("membres").get(), db.ref("actions_dispo").get(), db.ref("config").get(),
+  const [membresSnap, actionsDispoSnap, cfgSnap, quotasCatSnap] = await Promise.all([
+    db.ref("membres").get(), db.ref("actions_dispo").get(), db.ref("config").get(), db.ref("quotas_categorie").get(),
   ]);
   MEMBRES = membresSnap.val() || {};
   ACTIONS_DISPO = actionsDispoSnap.val() || {};
   const cfg = cfgSnap.val() || {};
   window.TAUX_DROGUE = cfg.taux_drogue ?? 100;
   window.TAUX_ACTIONS = cfg.taux_actions ?? 100;
+  QUOTAS_CAT = quotasCatSnap.val() || {};
 
   const selMembre = document.getElementById("fMembre");
   const filtreMembreSel = document.getElementById("filtreMembre");
@@ -113,6 +118,13 @@ async function boot() {
   selAction.addEventListener("change", () => {
     const a = ACTIONS_DISPO[selAction.value];
     document.getElementById("fleecaZone").style.display = (a && slugify(a.nom) === "fleeca") ? "block" : "none";
+    const estDrogue = a && a.categorie === "drogue";
+    document.getElementById("drogueZone").style.display = estDrogue ? "block" : "none";
+    if (estDrogue) {
+      const prodSel = document.getElementById("fProduit");
+      prodSel.innerHTML = Object.entries(QUOTAS_CAT).map(([id, c]) => `<option value="${id}">${c.nom}</option>`).join("")
+        || `<option value="">Aucune drogue configurée (Admin → Quotas)</option>`;
+    }
     afficherBanniereEvent(a);
   });
 
@@ -195,11 +207,14 @@ async function ajouterAction(e) {
   const action = ACTIONS_DISPO[actionId];
   const estFleeca = slugify(action.nom) === "fleeca";
   const coequipiers = estFleeca ? Array.from(document.getElementById("fCoequipiers").selectedOptions).map(o => o.value) : [];
+  const estDrogue = action.categorie === "drogue";
+  const produitId = estDrogue ? document.getElementById("fProduit").value : "";
+  if (estDrogue && !produitId) { alert("Sélectionne la drogue vendue."); return; }
+  const produitNom = estDrogue && produitId ? (QUOTAS_CAT[produitId] ? QUOTAS_CAT[produitId].nom : "") : "";
 
   let montant = 0;
   if (resultat === "Réussite") {
     const base = Number(action.montant) || 0;
-    const estDrogue = action.categorie === "drogue";
     const taux = estDrogue ? (window.TAUX_DROGUE ?? 100) : (window.TAUX_ACTIONS ?? 100);
     montant = Math.round(base * (taux / 100));
     if (estFleeca && coequipiers.length) montant = Math.round(montant / (coequipiers.length + 1));
@@ -208,8 +223,9 @@ async function ajouterAction(e) {
   const record = {
     membre_id: membreId,
     action_id: actionId,
-    action_nom: action.nom,
+    action_nom: action.nom + (produitNom ? " — " + produitNom : ""),
     categorie: action.categorie || "action",
+    produit_id: produitId || "",
     resultat,
     groupe: groupe || "",
     coequipiers,

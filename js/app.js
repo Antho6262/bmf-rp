@@ -5,6 +5,7 @@
 const NAV_ITEMS = [
   { id: "dashboard",   label: "Dashboard",   href: "pages/dashboard.html",   icon: "grid" },
   { id: "tracker",     label: "Tracker",     href: "pages/tracker.html",     icon: "target" },
+  { id: "quotas",      label: "Quotas",      href: "pages/quotas.html",      icon: "gauge" },
   { id: "taxes",       label: "Taxes",       href: "pages/taxes.html",       icon: "coin" },
   { id: "paye",        label: "Paye",        href: "pages/paye.html",        icon: "cash" },
   { id: "blanchiment", label: "Blanchiment", href: "pages/blanchiment.html", icon: "wash" },
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
 const ICONS = {
   grid: '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',
   target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/>',
+  gauge: '<path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4-5"/><circle cx="12" cy="15" r="1" fill="currentColor"/>',
   coin: '<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.5 1.3-2.5 3-2.5s3 1 3 2.5-1.3 2-3 2-3 .8-3 2.3 1.3 2.7 3 2.7 3-1 3-2.5"/>',
   cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 10v.01M18 14v.01"/>',
   wash: '<circle cx="12" cy="13" r="7"/><circle cx="12" cy="13" r="3"/><path d="M8 3h8"/>',
@@ -372,7 +374,7 @@ async function verifierQuotaEtAlerter(membreId, semaineId) {
     for (const [catId, cat] of Object.entries(quotasCat)) {
       const quotaMembre = membre.quotas_categorie ? membre.quotas_categorie[catId] : null;
       if (!quotaMembre) continue;
-      const count = mesActions.filter(a => a.categorie === catId).length;
+      const count = mesActions.filter(a => a.produit_id === catId).length;
       if (!marqueurs[catId] && count >= quotaMembre) {
         await db.ref(`semaines/${semaineId}/quota_alertes/${membreId}/${catId}`).set(true);
         envoyerWebhookEmbed(webhook, {
