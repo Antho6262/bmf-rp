@@ -132,7 +132,7 @@ async function renderMembres() {
     </div>
 
     <div class="table-wrap">
-      <table><thead><tr><th>Nom</th><th>Grade</th><th>Rôle</th><th>Statut</th><th>Quota global</th><th></th></tr></thead>
+      <table><thead><tr><th>Nom</th><th>Grade</th><th>Rôle</th><th>Statut</th><th>Quota global</th><th>Dans le tracker</th><th></th></tr></thead>
       <tbody>
         ${Object.entries(membres).map(([id, m]) => `
           <tr>
@@ -146,6 +146,7 @@ async function renderMembres() {
             </select></td>
             <td><span class="badge ${m.actif !== false ? "badge-ok" : "badge-neutral"}" style="cursor:pointer" onclick="toggleActif('${id}', ${m.actif !== false})">${m.actif !== false ? "Actif" : "Inactif"}</span></td>
             <td><input type="number" style="width:80px;" value="${m.quota_global || 0}" onchange="majMembre('${id}','quota_global',Number(this.value))"/></td>
+            <td style="text-align:center;"><input type="checkbox" ${m.hors_tracker ? "" : "checked"} onchange="majMembre('${id}','hors_tracker', !this.checked)" title="Décoche pour masquer ce membre du Tracker (ex: compte créateur/admin hors effectif)"/></td>
             <td>${m.role === "admin" ? "" : `<button class="btn-ghost btn-sm" onclick="supprimerMembre('${id}')">Suppr.</button>`}</td>
           </tr>
         `).join("")}

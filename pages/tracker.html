@@ -92,7 +92,7 @@ async function boot() {
   const selMembre = document.getElementById("fMembre");
   const filtreMembreSel = document.getElementById("filtreMembre");
   const coeqSel = document.getElementById("fCoequipiers");
-  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false).forEach(([id, m]) => {
+  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false && !m.hors_tracker).forEach(([id, m]) => {
     const label = `${m.prenom} ${m.nom}`;
     selMembre.innerHTML += `<option value="${id}" ${id === SESSION.id ? "selected" : ""}>${label}</option>`;
     filtreMembreSel.innerHTML += `<option value="${id}">${label}</option>`;
