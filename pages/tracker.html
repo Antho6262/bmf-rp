@@ -83,11 +83,14 @@ async function boot() {
     </div>
   `;
 
-  const [membresSnap, actionsDispoSnap] = await Promise.all([
-    db.ref("membres").get(), db.ref("actions_dispo").get(),
+  const [membresSnap, actionsDispoSnap, cfgSnap] = await Promise.all([
+    db.ref("membres").get(), db.ref("actions_dispo").get(), db.ref("config").get(),
   ]);
   MEMBRES = membresSnap.val() || {};
   ACTIONS_DISPO = actionsDispoSnap.val() || {};
+  const cfg = cfgSnap.val() || {};
+  window.TAUX_DROGUE = cfg.taux_drogue ?? 100;
+  window.TAUX_ACTIONS = cfg.taux_actions ?? 100;
 
   const selMembre = document.getElementById("fMembre");
   const filtreMembreSel = document.getElementById("filtreMembre");
@@ -195,7 +198,10 @@ async function ajouterAction(e) {
 
   let montant = 0;
   if (resultat === "Réussite") {
-    montant = Number(action.montant) || 0;
+    const base = Number(action.montant) || 0;
+    const estDrogue = action.categorie === "drogue";
+    const taux = estDrogue ? (window.TAUX_DROGUE ?? 100) : (window.TAUX_ACTIONS ?? 100);
+    montant = Math.round(base * (taux / 100));
     if (estFleeca && coequipiers.length) montant = Math.round(montant / (coequipiers.length + 1));
   }
 
@@ -203,6 +209,7 @@ async function ajouterAction(e) {
     membre_id: membreId,
     action_id: actionId,
     action_nom: action.nom,
+    categorie: action.categorie || "action",
     resultat,
     groupe: groupe || "",
     coequipiers,

@@ -192,34 +192,62 @@ async function ignorerReset(id) { await db.ref("reset_requests/" + id).remove();
 // ============ ACTIONS ============
 async function renderActions() {
   const el = document.getElementById("tabContent");
-  const snap = await db.ref("actions_dispo").get();
-  const actions = snap.val() || {};
+  const [actSnap, cfgSnap] = await Promise.all([db.ref("actions_dispo").get(), db.ref("config").get()]);
+  const actions = actSnap.val() || {};
+  const cfg = cfgSnap.val() || {};
+
   el.innerHTML = `
+    <div class="grid grid-2" style="margin-bottom:16px;">
+      <div class="card">
+        <h3>Taux Drogue (%)</h3>
+        <div class="field"><input type="number" id="tauxDrogue" value="${cfg.taux_drogue ?? 100}"/></div>
+        <button class="btn btn-sm" onclick="sauverTauxCategorie('taux_drogue', document.getElementById('tauxDrogue').value)">Enregistrer</button>
+      </div>
+      <div class="card">
+        <h3>Taux Actions (%)</h3>
+        <div class="field"><input type="number" id="tauxActions" value="${cfg.taux_actions ?? 100}"/></div>
+        <button class="btn btn-sm" onclick="sauverTauxCategorie('taux_actions', document.getElementById('tauxActions').value)">Enregistrer</button>
+      </div>
+    </div>
+
     <div class="card" style="margin-bottom:16px;">
       <h3>Nouvelle action</h3>
       <form id="actionForm" class="form-row" style="align-items:flex-end;">
         <div class="field"><label>Nom (ex: "Fleeca")</label><input type="text" id="aNom" required/></div>
-        <div class="field"><label>Montant (Réussite)</label><input type="number" id="aMontant" required/></div>
+        <div class="field"><label>Montant de base (Réussite)</label><input type="number" id="aMontant" required/></div>
+        <div class="field"><label>Catégorie</label>
+          <select id="aCategorie"><option value="action">Action</option><option value="drogue">Drogue</option></select>
+        </div>
         <button type="submit" class="btn">Ajouter</button>
       </form>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Montant</th><th></th></tr></thead>
+    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Catégorie</th><th>Montant de base</th><th></th></tr></thead>
       <tbody>
         ${Object.entries(actions).map(([id, a]) => `
           <tr><td>${a.nom}</td>
+            <td><select onchange="db.ref('actions_dispo/${id}/categorie').set(this.value)">
+              <option value="action" ${a.categorie !== "drogue" ? "selected" : ""}>Action</option>
+              <option value="drogue" ${a.categorie === "drogue" ? "selected" : ""}>Drogue</option>
+            </select></td>
             <td><input type="number" style="width:110px;" value="${a.montant}" onchange="db.ref('actions_dispo/${id}/montant').set(Number(this.value))"/></td>
             <td><button class="btn-ghost btn-sm" onclick="supprimerAction('${id}')">Suppr.</button></td></tr>
-        `).join("") || `<tr><td colspan="3" class="empty-state">Aucune action.</td></tr>`}
+        `).join("") || `<tr><td colspan="4" class="empty-state">Aucune action.</td></tr>`}
       </tbody></table></div>
   `;
   document.getElementById("actionForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const nom = document.getElementById("aNom").value.trim();
     const montant = Number(document.getElementById("aMontant").value) || 0;
-    await db.ref("actions_dispo").push({ nom, montant });
+    const categorie = document.getElementById("aCategorie").value;
+    await db.ref("actions_dispo").push({ nom, montant, categorie });
     logAudit("Action créée", nom);
     renderActions();
   });
+}
+async function sauverTauxCategorie(champ, val) {
+  await db.ref("config/" + champ).set(Number(val));
+  logAudit("Taux modifié", `${champ} = ${val}%`);
+  alert("Enregistré.");
 }
 async function supprimerAction(id) {
   if (!confirm("Supprimer cette action ?")) return;

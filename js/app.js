@@ -355,7 +355,7 @@ async function verifierQuotaEtAlerter(membreId, semaineId) {
 
     const actions = actionsSnap.val() || {};
     const mesActions = Object.values(actions).filter(a => a.membre_id === membreId && a.resultat === "Réussite");
-    const totalGlobal = mesActions.filter(a => !a.produit_drogue_id).length;
+    const totalGlobal = mesActions.filter(a => a.categorie !== "drogue").length;
 
     const marqueurs = marqueursSnap.val() || {};
 
