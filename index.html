@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Connexion</title>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body class="login-page">
+<canvas id="emberCanvas"></canvas>
+
+<div class="login-card">
+  <img src="img/logo.png" alt="BMF" class="login-logo"/>
+  <div class="login-title">BMF</div>
+  <div class="login-motto">Loyalty · Power · Respect</div>
+
+  <form id="loginForm">
+    <div class="field">
+      <label for="loginId">Identifiant (prénom_nom)</label>
+      <input type="text" id="loginId" autocomplete="username" required/>
+    </div>
+    <div class="field">
+      <label for="loginPass">Mot de passe</label>
+      <input type="password" id="loginPass" autocomplete="current-password" required/>
+    </div>
+    <button type="submit" class="btn" style="width:100%">Entrer</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
+
+  <div class="login-links">
+    <a href="setup.html">Créer le premier compte</a>
+    <a href="#" id="forgotLink">Mot de passe oublié</a>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/app.js"></script>
+<script>
+  (async function initEmbers() {
+    const canvas = document.getElementById("emberCanvas");
+    const ctx = canvas.getContext("2d");
+    let w, h, particles;
+    function resize() {
+      w = canvas.width = window.innerWidth;
+      h = canvas.height = window.innerHeight;
+    }
+    function spawn(n) {
+      particles = Array.from({ length: n }, () => ({
+        x: Math.random() * w, y: h + Math.random() * 100,
+        r: 0.6 + Math.random() * 1.8, vy: 0.25 + Math.random() * 0.6,
+        vx: (Math.random() - 0.5) * 0.3, a: 0.15 + Math.random() * 0.5,
+        flick: Math.random() * Math.PI * 2,
+      }));
+    }
+    resize(); spawn(70);
+    window.addEventListener("resize", () => { resize(); });
+    function loop() {
+      ctx.clearRect(0, 0, w, h);
+      particles.forEach(p => {
+        p.y -= p.vy; p.x += p.vx; p.flick += 0.05;
+        const alpha = p.a * (0.6 + 0.4 * Math.sin(p.flick));
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(201,162,39,${alpha})`;
+        ctx.shadowColor = "rgba(201,162,39,0.8)";
+        ctx.shadowBlur = 6;
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
+      });
+      requestAnimationFrame(loop);
+    }
+    loop();
+  })();
+
+  document.getElementById("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById("loginError");
+    errEl.textContent = "";
+    const id = slugify(document.getElementById("loginId").value);
+    const pass = document.getElementById("loginPass").value;
+
+    await authReady;
+    try {
+      const snap = await db.ref("membres/" + id).get();
+      if (!snap.exists()) { errEl.textContent = "Identifiant ou mot de passe incorrect."; return; }
+      const membre = snap.val();
+      if (membre.actif === false) { errEl.textContent = "Ce compte a été désactivé."; return; }
+      if (membre.password !== pass) { errEl.textContent = "Identifiant ou mot de passe incorrect."; return; }
+      setSession({ id, ...membre });
+      location.href = "pages/dashboard.html";
+    } catch (err) {
+      console.error(err);
+      errEl.textContent = "Erreur de connexion, réessaie.";
+    }
+  });
+
+  document.getElementById("forgotLink").addEventListener("click", async (e) => {
+    e.preventDefault();
+    const id = slugify(prompt("Ton identifiant (prénom_nom) :") || "");
+    if (!id) return;
+    await authReady;
+    const snap = await db.ref("membres/" + id).get();
+    if (!snap.exists()) { alert("Identifiant inconnu."); return; }
+    await db.ref("reset_requests/" + id).set({
+      membre_id: id, nom: snap.val().prenom + " " + snap.val().nom, createdAt: Date.now(),
+    });
+    alert("Demande envoyée. Un administrateur va réinitialiser ton mot de passe.");
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Configuration initiale</title>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body class="login-page">
+<div class="login-card" style="width:420px;">
+  <img src="img/logo.png" alt="BMF" class="login-logo"/>
+  <div class="login-title" style="font-size:22px;">Configuration initiale</div>
+  <div class="login-motto">Crée le premier membre (administrateur)</div>
+
+  <form id="setupForm" style="text-align:left; margin-top: 10px;">
+    <div class="form-row">
+      <div class="field"><label>Prénom</label><input type="text" id="prenom" required/></div>
+      <div class="field"><label>Nom</label><input type="text" id="nom" required/></div>
+    </div>
+    <div class="field"><label>Grade</label><input type="text" id="grade" value="Fondateur" required/></div>
+    <div class="field"><label>Mot de passe</label><input type="password" id="pass" required/></div>
+    <button type="submit" class="btn" style="width:100%">Créer le compte administrateur</button>
+    <div class="login-error" id="setupError"></div>
+  </form>
+  <div class="login-links" style="justify-content:center;">
+    <a href="index.html">← Retour à la connexion</a>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/app.js"></script>
+<script>
+  document.getElementById("setupForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById("setupError");
+    errEl.textContent = "";
+    await authReady;
+
+    const prenom = document.getElementById("prenom").value.trim();
+    const nom = document.getElementById("nom").value.trim();
+    const grade = document.getElementById("grade").value.trim();
+    const pass = document.getElementById("pass").value;
+    const id = slugify(prenom + "_" + nom);
+
+    try {
+      const existing = await db.ref("membres/" + id).get();
+      if (existing.exists()) { errEl.textContent = "Ce compte existe déjà — connecte-toi normalement."; return; }
+
+      await db.ref("membres/" + id).set({
+        prenom, nom, grade, password: pass, role: "admin", actif: true,
+        solde_sale: 0, solde_propre: 0, createdAt: Date.now(),
+      });
+      await db.ref("grades/" + slugify(grade)).set({ nom: grade, ordre: 0, taux_propre: 100, taux_sale: 100 });
+      setSession({ id, prenom, nom, grade, role: "admin", actif: true });
+      location.href = "pages/dashboard.html";
+    } catch (err) {
+      console.error(err);
+      errEl.textContent = "Erreur — vérifie ta connexion Firebase.";
+    }
+  });
+</script>
+</body>
+</html>

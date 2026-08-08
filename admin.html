@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Admin</title>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/app.js"></script>
+<script>
+let SESSION = null;
+const TABS = ["semaines", "membres", "actions", "quotas", "grades", "permissions", "config", "audit"];
+
+async function boot() {
+  SESSION = await initShell("admin");
+  if (!SESSION) return;
+  if (SESSION.role !== "admin") {
+    document.getElementById("pageContent").innerHTML = `<div class="empty-state">Accès réservé aux administrateurs.</div>`;
+    return;
+  }
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head"><div><h1>Admin</h1><div class="page-sub">Gestion de la famille</div></div></div>
+    <div class="tabs" id="tabs">
+      ${TABS.map(t => `<button class="tab-btn" data-tab="${t}">${label(t)}</button>`).join("")}
+    </div>
+    <div id="tabContent"></div>
+  `;
+
+  document.getElementById("tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    activerTab(btn.dataset.tab);
+  });
+
+  const hashTab = location.hash.replace("#", "");
+  activerTab(TABS.includes(hashTab) ? hashTab : "semaines");
+}
+
+function label(t) {
+  return { semaines: "Semaines", membres: "Membres", actions: "Actions", quotas: "Quotas",
+    grades: "Grades", permissions: "Permissions", config: "Config", audit: "Audit" }[t];
+}
+
+function activerTab(tab) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  history.replaceState(null, "", "#" + tab);
+  const renderers = {
+    semaines: renderSemaines, membres: renderMembres, actions: renderActions,
+    quotas: renderQuotas, grades: renderGrades, permissions: renderPermissions,
+    config: renderConfig, audit: renderAudit,
+  };
+  renderers[tab]();
+}
+
+// ============ SEMAINES ============
+async function renderSemaines() {
+  const el = document.getElementById("tabContent");
+  el.innerHTML = `<div class="flex-between" style="margin-bottom:14px;">
+      <div></div><button class="btn" id="btnCreerSemaine">+ Créer une semaine</button>
+    </div>
+    <div id="semainesList"></div>`;
+  document.getElementById("btnCreerSemaine").addEventListener("click", async () => {
+    await creerSemaine();
+    renderSemaines();
+  });
+
+  const snap = await db.ref("semaines").orderByChild("debut").get();
+  const semaines = Object.entries(snap.val() || {}).map(([id, s]) => ({ id, ...s })).sort((a, b) => b.debut - a.debut);
+  const list = document.getElementById("semainesList");
+  if (!semaines.length) { list.innerHTML = `<div class="empty-state">Aucune semaine.</div>`; return; }
+
+  list.innerHTML = semaines.map(s => `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="flex-between">
+        <div>
+          <strong class="text-gold">${s.nom}</strong>
+          <span class="badge ${s.bloquee ? "badge-neutral" : "badge-ok"}" style="margin-left:8px;">${s.bloquee ? "Verrouillée" : "En cours"}</span>
+        </div>
+        ${!s.bloquee ? `<button class="btn-ghost btn-sm" onclick="bloquerEtRafraichir('${s.id}')">Bloquer + Résumé</button>` : ""}
+      </div>
+      ${s.resume ? `<textarea readonly style="margin-top:10px; height:120px;" onclick="this.select()">${s.resume}</textarea>` : ""}
+    </div>
+  `).join("");
+}
+async function bloquerEtRafraichir(id) { await bloquerSemaine(id); renderSemaines(); }
+
+// ============ MEMBRES ============
+async function renderMembres() {
+  const el = document.getElementById("tabContent");
+  const [membresSnap, gradesSnap, resetSnap] = await Promise.all([
+    db.ref("membres").get(), db.ref("grades").get(), db.ref("reset_requests").get(),
+  ]);
+  const membres = membresSnap.val() || {};
+  const grades = gradesSnap.val() || {};
+  const resets = resetSnap.val() || {};
+
+  el.innerHTML = `
+    ${Object.keys(resets).length ? `
+      <div class="card" style="margin-bottom:16px; border-color: var(--gold);">
+        <h3>🔔 Demandes de réinitialisation</h3>
+        ${Object.entries(resets).map(([id, r]) => `
+          <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--line);">
+            <span>${r.nom}</span>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-sm btn" onclick="resetMdp('${id}')">Réinitialiser</button>
+              <button class="btn-ghost btn-sm" onclick="ignorerReset('${id}')">Ignorer</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>` : ""}
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3>Ajouter un membre</h3>
+      <form id="membreForm">
+        <div class="form-row">
+          <div class="field"><label>Prénom</label><input type="text" id="mPrenom" required/></div>
+          <div class="field"><label>Nom</label><input type="text" id="mNom" required/></div>
+          <div class="field"><label>Grade</label>
+            <select id="mGrade">${Object.values(grades).map(g => `<option value="${g.nom}">${g.nom}</option>`).join("") || `<option value="Membre">Membre</option>`}</select>
+          </div>
+          <div class="field"><label>Mot de passe</label><input type="password" id="mPass" required/></div>
+        </div>
+        <button type="submit" class="btn">Ajouter</button>
+      </form>
+    </div>
+
+    <div class="table-wrap">
+      <table><thead><tr><th>Nom</th><th>Grade</th><th>Rôle</th><th>Statut</th><th>Quota global</th><th></th></tr></thead>
+      <tbody>
+        ${Object.entries(membres).map(([id, m]) => `
+          <tr>
+            <td>${m.prenom} ${m.nom}</td>
+            <td><select onchange="majMembre('${id}','grade',this.value)">
+              ${Object.values(grades).map(g => `<option value="${g.nom}" ${g.nom === m.grade ? "selected" : ""}>${g.nom}</option>`).join("")}
+            </select></td>
+            <td><select onchange="majMembre('${id}','role',this.value)">
+              <option value="membre" ${m.role !== "admin" ? "selected" : ""}>Membre</option>
+              <option value="admin" ${m.role === "admin" ? "selected" : ""}>Admin</option>
+            </select></td>
+            <td><span class="badge ${m.actif !== false ? "badge-ok" : "badge-neutral"}" style="cursor:pointer" onclick="toggleActif('${id}', ${m.actif !== false})">${m.actif !== false ? "Actif" : "Inactif"}</span></td>
+            <td><input type="number" style="width:80px;" value="${m.quota_global || 0}" onchange="majMembre('${id}','quota_global',Number(this.value))"/></td>
+            <td>${m.role === "admin" ? "" : `<button class="btn-ghost btn-sm" onclick="supprimerMembre('${id}')">Suppr.</button>`}</td>
+          </tr>
+        `).join("")}
+      </tbody></table>
+    </div>
+  `;
+
+  document.getElementById("membreForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const prenom = document.getElementById("mPrenom").value.trim();
+    const nom = document.getElementById("mNom").value.trim();
+    const grade = document.getElementById("mGrade").value;
+    const pass = document.getElementById("mPass").value;
+    const id = slugify(prenom + "_" + nom);
+    const exist = await db.ref("membres/" + id).get();
+    if (exist.exists()) { alert("Ce membre existe déjà."); return; }
+    await db.ref("membres/" + id).set({
+      prenom, nom, grade, password: pass, role: "membre", actif: true,
+      solde_sale: 0, solde_propre: 0, quota_global: 0, createdAt: Date.now(),
+    });
+    logAudit("Membre ajouté", `${prenom} ${nom}`);
+    renderMembres();
+  });
+}
+async function majMembre(id, champ, val) { await db.ref(`membres/${id}/${champ}`).set(val); logAudit("Membre modifié", `${id} — ${champ}`); }
+async function toggleActif(id, actuel) { await db.ref(`membres/${id}/actif`).set(!actuel); logAudit("Membre " + (!actuel ? "activé" : "désactivé"), id); renderMembres(); }
+async function supprimerMembre(id) {
+  if (!confirm("Supprimer ce membre définitivement ?")) return;
+  await db.ref("membres/" + id).remove();
+  logAudit("Membre supprimé", id);
+  renderMembres();
+}
+async function resetMdp(id) {
+  const nouveau = prompt("Nouveau mot de passe pour " + id + " :");
+  if (!nouveau) return;
+  await db.ref("membres/" + id + "/password").set(nouveau);
+  await db.ref("reset_requests/" + id).remove();
+  logAudit("Mot de passe réinitialisé", id);
+  renderMembres();
+}
+async function ignorerReset(id) { await db.ref("reset_requests/" + id).remove(); renderMembres(); }
+
+// ============ ACTIONS ============
+async function renderActions() {
+  const el = document.getElementById("tabContent");
+  const snap = await db.ref("actions_dispo").get();
+  const actions = snap.val() || {};
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <h3>Nouvelle action</h3>
+      <form id="actionForm" class="form-row" style="align-items:flex-end;">
+        <div class="field"><label>Nom (ex: "Fleeca")</label><input type="text" id="aNom" required/></div>
+        <div class="field"><label>Montant (Réussite)</label><input type="number" id="aMontant" required/></div>
+        <button type="submit" class="btn">Ajouter</button>
+      </form>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Montant</th><th></th></tr></thead>
+      <tbody>
+        ${Object.entries(actions).map(([id, a]) => `
+          <tr><td>${a.nom}</td>
+            <td><input type="number" style="width:110px;" value="${a.montant}" onchange="db.ref('actions_dispo/${id}/montant').set(Number(this.value))"/></td>
+            <td><button class="btn-ghost btn-sm" onclick="supprimerAction('${id}')">Suppr.</button></td></tr>
+        `).join("") || `<tr><td colspan="3" class="empty-state">Aucune action.</td></tr>`}
+      </tbody></table></div>
+  `;
+  document.getElementById("actionForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nom = document.getElementById("aNom").value.trim();
+    const montant = Number(document.getElementById("aMontant").value) || 0;
+    await db.ref("actions_dispo").push({ nom, montant });
+    logAudit("Action créée", nom);
+    renderActions();
+  });
+}
+async function supprimerAction(id) {
+  if (!confirm("Supprimer cette action ?")) return;
+  const snap = await db.ref("actions_dispo/" + id).get();
+  await db.ref("actions_dispo/" + id).remove();
+  logAudit("Action supprimée", snap.val()?.nom || id);
+  renderActions();
+}
+
+// ============ QUOTAS ============
+async function renderQuotas() {
+  const el = document.getElementById("tabContent");
+  const [membresSnap, catsSnap] = await Promise.all([db.ref("membres").get(), db.ref("quotas_categorie").get()]);
+  const membres = membresSnap.val() || {};
+  const cats = catsSnap.val() || {};
+
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <h3>Nouvelle catégorie de quota</h3>
+      <form id="catForm" class="form-row" style="align-items:flex-end;">
+        <div class="field"><label>Nom de catégorie</label><input type="text" id="cNom" required/></div>
+        <button type="submit" class="btn">Ajouter</button>
+      </form>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Membre</th><th>Quota global</th>${Object.values(cats).map(c => `<th>${c.nom}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${Object.entries(membres).map(([id, m]) => `
+          <tr><td>${m.prenom} ${m.nom}</td>
+            <td><input type="number" style="width:80px;" value="${m.quota_global || 0}" onchange="db.ref('membres/${id}/quota_global').set(Number(this.value))"/></td>
+            ${Object.keys(cats).map(catId => `
+              <td><input type="number" style="width:80px;" value="${(m.quotas_categorie && m.quotas_categorie[catId]) || 0}" onchange="db.ref('membres/${id}/quotas_categorie/${catId}').set(Number(this.value))"/></td>
+            `).join("")}
+          </tr>
+        `).join("") || `<tr><td class="empty-state">Aucun membre.</td></tr>`}
+      </tbody>
+    </table></div>
+  `;
+  document.getElementById("catForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nom = document.getElementById("cNom").value.trim();
+    await db.ref("quotas_categorie").push({ nom });
+    renderQuotas();
+  });
+}
+
+// ============ GRADES ============
+async function renderGrades() {
+  const el = document.getElementById("tabContent");
+  const snap = await db.ref("grades").get();
+  const grades = snap.val() || {};
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <h3>Nouveau grade</h3>
+      <form id="gradeForm" class="form-row" style="align-items:flex-end;">
+        <div class="field"><label>Nom</label><input type="text" id="gNom" required/></div>
+        <div class="field"><label>Ordre</label><input type="number" id="gOrdre" value="0"/></div>
+        <button type="submit" class="btn">Ajouter</button>
+      </form>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Ordre</th><th></th></tr></thead>
+      <tbody>
+        ${Object.entries(grades).sort((a,b)=> (a[1].ordre||0)-(b[1].ordre||0)).map(([id, g]) => `
+          <tr><td>${g.nom}</td><td>${g.ordre || 0}</td>
+            <td><button class="btn-ghost btn-sm" onclick="supprimerGrade('${id}')">Suppr.</button></td></tr>
+        `).join("") || `<tr><td colspan="3" class="empty-state">Aucun grade.</td></tr>`}
+      </tbody></table></div>
+  `;
+  document.getElementById("gradeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nom = document.getElementById("gNom").value.trim();
+    const ordre = Number(document.getElementById("gOrdre").value) || 0;
+    await db.ref("grades/" + slugify(nom)).set({ nom, ordre, taux_propre: 100, taux_sale: 100 });
+    logAudit("Grade créé", nom);
+    renderGrades();
+  });
+}
+async function supprimerGrade(id) {
+  if (!confirm("Supprimer ce grade ?")) return;
+  await db.ref("grades/" + id).remove();
+  logAudit("Grade supprimé", id);
+  renderGrades();
+}
+
+// ============ PERMISSIONS (visibilité des pages par grade) ============
+async function renderPermissions() {
+  const el = document.getElementById("tabContent");
+  const [gradesSnap, permSnap] = await Promise.all([db.ref("grades").get(), db.ref("permissions").get()]);
+  const grades = gradesSnap.val() || {};
+  const perms = permSnap.val() || {};
+  el.innerHTML = `
+    <div class="page-sub" style="margin-bottom:14px;">Décoche une page pour la masquer à un grade (les administrateurs voient toujours tout).</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Grade</th>${PAGES_DISPO.map(p => `<th>${p.label}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${Object.values(grades).map(g => `
+          <tr><td>${g.nom}</td>
+            ${PAGES_DISPO.map(p => {
+              const val = perms[g.nom] ? perms[g.nom][p.id] : undefined;
+              const checked = val !== false;
+              return `<td style="text-align:center;"><input type="checkbox" ${checked ? "checked" : ""} onchange="db.ref('permissions/${g.nom}/${p.id}').set(this.checked)"/></td>`;
+            }).join("")}
+          </tr>
+        `).join("") || `<tr><td class="empty-state">Aucun grade défini.</td></tr>`}
+      </tbody>
+    </table></div>
+  `;
+}
+
+// ============ CONFIG ============
+async function renderConfig() {
+  const el = document.getElementById("tabContent");
+  const cfgSnap = await db.ref("config").get();
+  const cfg = cfgSnap.val() || {};
+  el.innerHTML = `
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>Webhook Discord (quotas, badges, résumés)</h3>
+        <div class="field"><input type="text" id="cfgWebhook" value="${cfg.discord_webhook_quota || ""}" placeholder="https://discord.com/api/webhooks/..."/></div>
+        <button class="btn btn-sm" onclick="sauverConfig('discord_webhook_quota', document.getElementById('cfgWebhook').value.trim())">Enregistrer</button>
+      </div>
+      <div class="card">
+        <h3>Taux de blanchiment (%)</h3>
+        <div class="field"><input type="number" id="cfgTaux" value="${cfg.blanchiment_taux ?? 20}"/></div>
+        <button class="btn btn-sm" onclick="sauverConfig('blanchiment_taux', Number(document.getElementById('cfgTaux').value))">Enregistrer</button>
+      </div>
+      <div class="card">
+        <h3>📻 Radio</h3>
+        <div class="field"><label>Fréquence (MHz)</label><input type="number" step="0.01" id="cfgRadioFreq" value="${(cfg.radio && cfg.radio.frequence) || ""}"/></div>
+        <div class="field"><label>Nom du canal</label><input type="text" id="cfgRadioNom" value="${(cfg.radio && cfg.radio.nom) || ""}"/></div>
+        <button class="btn btn-sm" onclick="sauverRadio()">Enregistrer</button>
+      </div>
+      <div class="card">
+        <h3>🎯 Events — Taux spéciaux</h3>
+        <div class="checkbox-row field"><input type="checkbox" id="cfgEventActif" ${(cfg.event && cfg.event.actif) ? "checked" : ""}/><label class="mt-0" style="margin:0;">Événement actif</label></div>
+        <div class="field"><label>Nom</label><input type="text" id="cfgEventNom" value="${(cfg.event && cfg.event.nom) || ""}"/></div>
+        <div class="field"><label>Description</label><input type="text" id="cfgEventDesc" value="${(cfg.event && cfg.event.description) || ""}"/></div>
+        <button class="btn btn-sm" onclick="sauverEvent()">Enregistrer</button>
+      </div>
+    </div>
+  `;
+}
+async function sauverConfig(champ, val) { await db.ref("config/" + champ).set(val); logAudit("Config modifiée", champ); alert("Enregistré."); }
+async function sauverRadio() {
+  const frequence = Number(document.getElementById("cfgRadioFreq").value) || 0;
+  const nom = document.getElementById("cfgRadioNom").value.trim();
+  await db.ref("config/radio").set({ frequence, nom, updatedAt: Date.now() });
+  logAudit("Radio modifiée", `${frequence} MHz — ${nom}`);
+  alert("Radio mise à jour.");
+}
+async function sauverEvent() {
+  const actif = document.getElementById("cfgEventActif").checked;
+  const nom = document.getElementById("cfgEventNom").value.trim();
+  const description = document.getElementById("cfgEventDesc").value.trim();
+  await db.ref("config/event").set({ actif, nom, description });
+  logAudit("Event modifié", nom);
+  alert("Event mis à jour.");
+}
+
+// ============ AUDIT ============
+async function renderAudit() {
+  const el = document.getElementById("tabContent");
+  const snap = await db.ref("audit").orderByChild("createdAt").limitToLast(200).get();
+  const entries = Object.values(snap.val() || {}).sort((a, b) => b.createdAt - a.createdAt);
+  el.innerHTML = `
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Action</th><th>Détails</th><th>Par</th></tr></thead>
+      <tbody>
+        ${entries.map(a => `
+          <tr><td class="text-dim">${new Date(a.createdAt).toLocaleString("fr-FR")}</td>
+            <td class="text-gold">${a.action}</td><td>${a.details || ""}</td><td class="text-dim">${a.membre}</td></tr>
+        `).join("") || `<tr><td colspan="4" class="empty-state">Aucune entrée.</td></tr>`}
+      </tbody></table></div>
+  `;
+}
+
+boot();
+</script>
+</body>
+</html>

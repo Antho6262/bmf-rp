@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Blanchiment</title>
+<link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+let MEMBRES = {}, TAUX = 20;
+
+async function boot() {
+  const session = await initShell("blanchiment");
+  if (!session) return;
+  window.SESSION = session;
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head"><div><h1>Blanchiment</h1><div class="page-sub">Conversion d'argent sale en argent propre — taux actuel : <span id="tauxLabel" class="text-gold"></span></div></div></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>Nouveau blanchiment</h3>
+      <form id="blanchForm">
+        <div class="form-row">
+          <div class="field"><label>Membre</label><select id="fMembre" required></select></div>
+          <div class="field"><label>Solde sale disponible</label><input type="text" id="fSolde" readonly class="mono"/></div>
+        </div>
+        <div class="form-row">
+          <div class="field"><label>Montant à blanchir</label><input type="number" id="fMontant" min="0" step="1" required/></div>
+          <div class="field"><label>Montant propre obtenu</label><input type="text" id="fResult" readonly class="mono text-gold"/></div>
+        </div>
+        <button type="submit" class="btn">Blanchir</button>
+      </form>
+    </div>
+
+    <div class="crest-divider">${svgIcon("wash","")}</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Membre</th><th>Montant sale</th><th>Taux</th><th>Montant propre</th><th></th></tr></thead>
+        <tbody id="rowsBody"></tbody>
+      </table>
+    </div>
+  `;
+
+  const [membresSnap, cfgSnap] = await Promise.all([db.ref("membres").get(), db.ref("config/blanchiment_taux").get()]);
+  MEMBRES = membresSnap.val() || {};
+  TAUX = cfgSnap.val() ?? 20;
+  document.getElementById("tauxLabel").textContent = TAUX + " %";
+
+  const membreSel = document.getElementById("fMembre");
+  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false).forEach(([id, m]) => {
+    membreSel.innerHTML += `<option value="${id}">${m.prenom} ${m.nom}</option>`;
+  });
+
+  const maj = () => {
+    const m = MEMBRES[membreSel.value];
+    document.getElementById("fSolde").value = fmtArgent(m ? (m.solde_sale || 0) : 0);
+    recalc();
+  };
+  membreSel.addEventListener("change", maj);
+  document.getElementById("fMontant").addEventListener("input", recalc);
+  maj();
+
+  document.getElementById("blanchForm").addEventListener("submit", blanchir);
+  db.ref("blanchiments").on("value", (snap) => { renderRows(snap.val() || {}); });
+}
+
+function recalc() {
+  const montant = Number(document.getElementById("fMontant").value) || 0;
+  document.getElementById("fResult").value = fmtArgent(Math.round(montant * (1 - TAUX / 100)));
+}
+
+async function blanchir(e) {
+  e.preventDefault();
+  const membreId = document.getElementById("fMembre").value;
+  const montant = Number(document.getElementById("fMontant").value) || 0;
+  const disponible = MEMBRES[membreId]?.solde_sale || 0;
+  if (montant <= 0 || montant > disponible) { alert("Montant invalide ou supérieur au solde disponible."); return; }
+
+  const montantPropre = Math.round(montant * (1 - TAUX / 100));
+  await db.ref("blanchiments").push({
+    membre_id: membreId, montant_sale: montant, taux: TAUX, montant_propre: montantPropre, createdAt: Date.now(),
+  });
+  await db.ref("membres/" + membreId + "/solde_sale").transaction(cur => Math.max(0, (cur || 0) - montant));
+  await db.ref("membres/" + membreId + "/solde_propre").transaction(cur => (cur || 0) + montantPropre);
+  MEMBRES[membreId].solde_sale = Math.max(0, (MEMBRES[membreId].solde_sale || 0) - montant);
+  logAudit("Blanchiment effectué", `${MEMBRES[membreId].prenom} — ${fmtArgent(montant)} → ${fmtArgent(montantPropre)}`);
+
+  document.getElementById("fMontant").value = "";
+  document.getElementById("fSolde").value = fmtArgent(MEMBRES[membreId].solde_sale);
+  recalc();
+}
+
+async function annulerBlanchiment(id) {
+  if (!confirm("Annuler ce blanchiment ? L'argent sera restitué en sale.")) return;
+  const snap = await db.ref("blanchiments/" + id).get();
+  const b = snap.val();
+  if (!b) return;
+  await db.ref("membres/" + b.membre_id + "/solde_sale").transaction(cur => (cur || 0) + b.montant_sale);
+  await db.ref("membres/" + b.membre_id + "/solde_propre").transaction(cur => Math.max(0, (cur || 0) - b.montant_propre));
+  await db.ref("blanchiments/" + id).remove();
+  logAudit("Blanchiment annulé", `${MEMBRES[b.membre_id]?.prenom || "?"} — ${fmtArgent(b.montant_sale)}`);
+}
+
+function renderRows(blanchiments) {
+  const rows = Object.entries(blanchiments).map(([id, b]) => ({ id, ...b })).sort((a, b) => b.createdAt - a.createdAt);
+  const tbody = document.getElementById("rowsBody");
+  if (!rows.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Aucun blanchiment.</td></tr>`; return; }
+  tbody.innerHTML = rows.map(b => `
+    <tr>
+      <td class="text-dim">${new Date(b.createdAt).toLocaleString("fr-FR")}</td>
+      <td>${MEMBRES[b.membre_id] ? MEMBRES[b.membre_id].prenom + " " + MEMBRES[b.membre_id].nom : "?"}</td>
+      <td class="mono text-dim">${fmtArgent(b.montant_sale)}</td>
+      <td class="mono text-dim">${b.taux}%</td>
+      <td class="mono text-gold">${fmtArgent(b.montant_propre)}</td>
+      <td>${SESSION.role === "admin" ? `<button class="btn-ghost btn-sm" onclick="annulerBlanchiment('${b.id}')">Annuler</button>` : ""}</td>
+    </tr>`).join("");
+}
+
+boot();
+</script>
+</body>
+</html>

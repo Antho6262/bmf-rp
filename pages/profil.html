@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Profil</title>
+<link rel="stylesheet" href="../css/style.css"/>
+<style>
+  .badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-top: 12px; }
+  .badge-tile { border: 1px solid var(--line); border-radius: 10px; padding: 16px; text-align: center; background: var(--bg-1); }
+  .badge-tile.locked { opacity: 0.35; filter: grayscale(1); }
+  .badge-tile .icon { font-size: 28px; }
+  .badge-tile .name { font-size: 12px; margin-top: 8px; color: var(--text); }
+</style>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+async function boot() {
+  const session = await initShell("profil");
+  if (!session) return;
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head"><div><h1>Profil</h1><div class="page-sub">${session.prenom} ${session.nom} — ${session.grade}</div></div></div>
+
+    <div class="grid grid-3">
+      <div class="card"><h3>Solde propre</h3><div class="stat-value">${fmtArgent(session.solde_propre || 0)}</div></div>
+      <div class="card"><h3>Solde sale</h3><div class="stat-value">${fmtArgent(session.solde_sale || 0)}</div></div>
+      <div class="card"><h3>Rôle</h3><div class="stat-value" style="font-size:18px;">${session.role === "admin" ? "Administrateur" : "Membre"}</div></div>
+    </div>
+
+    <div class="crest-divider">${svgIcon("user","")}</div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>Badges & records</h3>
+      <div id="statsLine" class="stat-sub" style="margin-bottom:6px;"></div>
+      <div class="badge-grid" id="badgeGrid"></div>
+    </div>
+
+    <div class="card">
+      <h3>Changer mon mot de passe</h3>
+      <form id="passForm" class="form-row" style="align-items:flex-end;">
+        <div class="field" style="max-width:280px;"><label>Nouveau mot de passe</label><input type="password" id="newPass" required/></div>
+        <button type="submit" class="btn">Mettre à jour</button>
+      </form>
+    </div>
+  `;
+
+  const statSnap = await db.ref("stats_membres/" + session.id).get();
+  const stat = statSnap.val() || { total_actions: 0, semaines_gagnees: 0, streak_actuel: 0, badges: {} };
+  document.getElementById("statsLine").textContent =
+    `${stat.total_actions || 0} actions cumulées · ${stat.semaines_gagnees || 0} semaine(s) gagnée(s) · série actuelle : ${stat.streak_actuel || 0}`;
+
+  const badges = stat.badges || {};
+  document.getElementById("badgeGrid").innerHTML = BADGES_DEFS.map(b => `
+    <div class="badge-tile ${badges[b.id] ? "" : "locked"}">
+      <div class="icon">${b.icone}</div>
+      <div class="name">${b.nom}</div>
+    </div>`).join("");
+
+  document.getElementById("passForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const val = document.getElementById("newPass").value;
+    await db.ref("membres/" + session.id + "/password").set(val);
+    logAudit("Mot de passe modifié", session.prenom + " " + session.nom);
+    alert("Mot de passe mis à jour.");
+    document.getElementById("newPass").value = "";
+  });
+}
+boot();
+</script>
+</body>
+</html>

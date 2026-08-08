@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Dashboard</title>
+<link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+(async function () {
+  const session = await initShell("dashboard");
+  if (!session) return;
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>Dashboard</h1>
+        <div class="page-sub">Vue d'ensemble de la famille — ${session.prenom} ${session.nom}</div>
+      </div>
+    </div>
+    <div id="eventBannerSlot"></div>
+    <div class="grid grid-4" id="statCards"></div>
+    <div class="crest-divider">${svgIcon("target","")}</div>
+    <div class="grid grid-2">
+      <div class="card">
+        <h3>Classement de la semaine</h3>
+        <div id="classementList"></div>
+      </div>
+      <div class="card">
+        <h3>Dernières actions</h3>
+        <div id="dernieresActions"></div>
+      </div>
+    </div>
+  `;
+
+  // Event actif
+  const cfgSnap = await db.ref("config/event").get();
+  const event = cfgSnap.val();
+  if (event && event.actif) {
+    document.getElementById("eventBannerSlot").innerHTML = `
+      <div class="event-banner">⚡ Événement en cours : <strong style="margin-left:4px">${event.nom}</strong>${event.description ? " — " + event.description : ""}</div>`;
+  }
+
+  // Semaine active
+  const semSnap = await db.ref("semaines").orderByChild("debut").limitToLast(1).get();
+  const semaines = semSnap.val() || {};
+  const semId = Object.keys(semaines)[0];
+  const semaine = semaines[semId];
+
+  const membreMe = session;
+  const soldeSale = membreMe.solde_sale || 0;
+  const soldePropre = membreMe.solde_propre || 0;
+
+  let actionsSemaine = {};
+  if (semId) {
+    const actSnap = await db.ref("actions/" + semId).get();
+    actionsSemaine = actSnap.val() || {};
+  }
+  const mesActions = Object.values(actionsSemaine).filter(a => a.membre_id === session.id);
+  const mesReussites = mesActions.filter(a => a.resultat === "Réussite").length;
+
+  document.getElementById("statCards").innerHTML = `
+    <div class="card"><h3>Solde propre</h3><div class="stat-value">${fmtArgent(soldePropre)}</div></div>
+    <div class="card"><h3>Solde sale</h3><div class="stat-value">${fmtArgent(soldeSale)}</div></div>
+    <div class="card"><h3>Mes actions (semaine)</h3><div class="stat-value">${mesReussites}</div><div class="stat-sub">sur ${mesActions.length} tentées</div></div>
+    <div class="card"><h3>Semaine active</h3><div class="stat-value" style="font-size:16px;">${semaine ? semaine.nom : "—"}</div>
+      <div class="stat-sub">${semaine ? (semaine.bloquee ? "Verrouillée" : "En cours") : "Aucune semaine"}</div></div>
+  `;
+
+  // Classement
+  const gains = {};
+  Object.values(actionsSemaine).forEach(a => {
+    if (a.resultat !== "Réussite") return;
+    gains[a.membre_id] = (gains[a.membre_id] || 0) + (Number(a.montant_sale) || 0) + (Number(a.montant_propre) || 0);
+  });
+  const membresSnap = await db.ref("membres").get();
+  const membres = membresSnap.val() || {};
+  const classement = Object.entries(gains).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  document.getElementById("classementList").innerHTML = classement.length ? `
+    <div class="table-wrap"><table><tbody>
+      ${classement.map(([id, gain], i) => `
+        <tr>
+          <td style="width:30px;">${i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : (i + 1)}</td>
+          <td>${membres[id] ? membres[id].prenom + " " + membres[id].nom : "?"}</td>
+          <td style="text-align:right;" class="mono text-gold">${fmtArgent(gain)}</td>
+        </tr>`).join("")}
+    </tbody></table></div>
+  ` : `<div class="empty-state">Aucune action cette semaine.</div>`;
+
+  // Dernières actions (toutes, 8 dernières)
+  const toutes = Object.values(actionsSemaine).sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
+  document.getElementById("dernieresActions").innerHTML = toutes.length ? `
+    <div class="table-wrap"><table><tbody>
+      ${toutes.map(a => `
+        <tr>
+          <td>${membres[a.membre_id] ? membres[a.membre_id].prenom : "?"}</td>
+          <td>${a.action_nom || "?"}</td>
+          <td><span class="badge ${a.resultat === "Réussite" ? "badge-ok" : "badge-fail"}">${a.resultat}</span></td>
+        </tr>`).join("")}
+    </tbody></table></div>
+  ` : `<div class="empty-state">Aucune activité récente.</div>`;
+})();
+</script>
+</body>
+</html>

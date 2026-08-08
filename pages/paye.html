@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Paye</title>
+<link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+let MEMBRES = {}, BLANCHIMENT_TAUX = 20;
+
+async function boot() {
+  const session = await initShell("paye");
+  if (!session) return;
+  window.SESSION = session;
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head"><div><h1>Paye</h1><div class="page-sub">Versement des gains accumulés</div></div></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>Nouveau versement</h3>
+      <form id="payeForm">
+        <div class="form-row">
+          <div class="field"><label>Membre</label><select id="fMembre" required></select></div>
+          <div class="field"><label>Solde disponible</label><input type="text" id="fSolde" readonly class="mono"/></div>
+        </div>
+        <div class="form-row">
+          <div class="field"><label>Montant à payer</label><input type="number" id="fMontant" min="0" step="1" required/></div>
+          <div class="field"><label>Type d'argent</label>
+            <select id="fType"><option value="propre" selected>Propre</option><option value="sale">Sale</option></select>
+          </div>
+          <div class="field"><label>Montant versé (calculé)</label><input type="text" id="fVerse" readonly class="mono text-gold"/></div>
+        </div>
+        <button type="submit" class="btn">Valider le paiement</button>
+      </form>
+    </div>
+
+    <div class="crest-divider">${svgIcon("cash","")}</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Membre</th><th>Type</th><th>Montant brut</th><th>Montant versé</th></tr></thead>
+        <tbody id="rowsBody"></tbody>
+      </table>
+    </div>
+  `;
+
+  const [membresSnap, cfgSnap] = await Promise.all([db.ref("membres").get(), db.ref("config/blanchiment_taux").get()]);
+  MEMBRES = membresSnap.val() || {};
+  BLANCHIMENT_TAUX = cfgSnap.val() ?? 20;
+
+  const membreSel = document.getElementById("fMembre");
+  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false).forEach(([id, m]) => {
+    membreSel.innerHTML += `<option value="${id}">${m.prenom} ${m.nom}</option>`;
+  });
+
+  const maj = () => {
+    const m = MEMBRES[membreSel.value];
+    document.getElementById("fSolde").value = fmtArgent(m ? (m.solde_sale || 0) : 0);
+    recalcVerse();
+  };
+  membreSel.addEventListener("change", maj);
+  document.getElementById("fType").addEventListener("change", recalcVerse);
+  document.getElementById("fMontant").addEventListener("input", recalcVerse);
+  maj();
+
+  document.getElementById("payeForm").addEventListener("submit", payer);
+  db.ref("paiements").orderByChild("createdAt").on("value", (snap) => { renderRows(snap.val() || {}); });
+}
+
+function recalcVerse() {
+  const montant = Number(document.getElementById("fMontant").value) || 0;
+  const type = document.getElementById("fType").value;
+  const verse = type === "propre" ? Math.round(montant * (1 - BLANCHIMENT_TAUX / 100)) : montant;
+  document.getElementById("fVerse").value = fmtArgent(verse);
+}
+
+async function payer(e) {
+  e.preventDefault();
+  const membreId = document.getElementById("fMembre").value;
+  const montant = Number(document.getElementById("fMontant").value) || 0;
+  const type = document.getElementById("fType").value;
+  const disponible = MEMBRES[membreId]?.solde_sale || 0;
+  if (montant > disponible) { alert("Le montant dépasse le solde disponible."); return; }
+
+  const verse = type === "propre" ? Math.round(montant * (1 - BLANCHIMENT_TAUX / 100)) : montant;
+  await db.ref("paiements").push({
+    membre_id: membreId, type, montant_brut: montant, montant_verse: verse, createdAt: Date.now(),
+  });
+  await db.ref("membres/" + membreId + "/solde_sale").transaction(cur => Math.max(0, (cur || 0) - montant));
+  MEMBRES[membreId].solde_sale = Math.max(0, (MEMBRES[membreId].solde_sale || 0) - montant);
+  logAudit("Paiement effectué", `${MEMBRES[membreId].prenom} — ${fmtArgent(verse)} (${type})`);
+
+  document.getElementById("fMontant").value = "";
+  document.getElementById("fSolde").value = fmtArgent(MEMBRES[membreId].solde_sale);
+  recalcVerse();
+}
+
+function renderRows(paiements) {
+  const rows = Object.values(paiements).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+  const tbody = document.getElementById("rowsBody");
+  if (!rows.length) { tbody.innerHTML = `<tr><td colspan="5" class="empty-state">Aucun paiement.</td></tr>`; return; }
+  tbody.innerHTML = rows.map(p => `
+    <tr>
+      <td class="text-dim">${new Date(p.createdAt).toLocaleString("fr-FR")}</td>
+      <td>${MEMBRES[p.membre_id] ? MEMBRES[p.membre_id].prenom + " " + MEMBRES[p.membre_id].nom : "?"}</td>
+      <td><span class="badge badge-neutral">${p.type === "propre" ? "Propre" : "Sale"}</span></td>
+      <td class="mono text-dim">${fmtArgent(p.montant_brut)}</td>
+      <td class="mono text-gold">${fmtArgent(p.montant_verse)}</td>
+    </tr>`).join("");
+}
+
+boot();
+</script>
+</body>
+</html>

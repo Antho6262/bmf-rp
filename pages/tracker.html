@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Tracker</title>
+<link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+let SEM_ID = null, SEMAINE = null, ACTIONS_DISPO = {}, MEMBRES = {}, TOUTES_ACTIONS = {};
+
+async function boot() {
+  const session = await initShell("tracker");
+  if (!session) return;
+  window.SESSION = session;
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head">
+      <div><h1>Tracker</h1><div class="page-sub" id="semaineLabel">Semaine active : —</div></div>
+    </div>
+    <div id="eventBannerSlot"></div>
+    <div class="card" style="margin-bottom:20px;">
+      <h3>Nouvelle action</h3>
+      <form id="actionForm">
+        <div class="form-row">
+          <div class="field">
+            <label>Membre</label>
+            <select id="fMembre" required></select>
+          </div>
+          <div class="field">
+            <label>Action</label>
+            <select id="fAction" required></select>
+          </div>
+          <div class="field">
+            <label>Résultat</label>
+            <select id="fResultat" required>
+              <option value="Réussite">Réussite</option>
+              <option value="Échec">Échec</option>
+            </select>
+          </div>
+        </div>
+        <div id="fleecaZone" class="field hidden" style="display:none;">
+          <label>Coéquipiers (Fleeca — ne comptent pas dans leurs stats)</label>
+          <select id="fCoequipiers" multiple style="height:90px;"></select>
+        </div>
+        <div class="field">
+          <label>Groupe (optionnel)</label>
+          <input type="text" id="fGroupe" placeholder="Nom du groupe payé"/>
+        </div>
+        <button type="submit" class="btn">Ajouter l'action</button>
+      </form>
+    </div>
+
+    <div class="crest-divider">${svgIcon("target","")}</div>
+
+    <div class="flex-between" style="margin-bottom:14px;">
+      <h3 style="margin:0; text-transform:uppercase; font-size:13px; color:var(--text-dim); letter-spacing:.06em;">Historique</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <select id="filtreMembre" style="width:150px;"><option value="">Tous les membres</option></select>
+        <select id="filtreAction" style="width:150px;"><option value="">Toutes les actions</option></select>
+        <select id="filtreResultat" style="width:130px;">
+          <option value="">Tous résultats</option>
+          <option value="Réussite">Réussite</option>
+          <option value="Échec">Échec</option>
+        </select>
+        <select id="filtreLimite" style="width:100px;">
+          <option value="10">10</option><option value="30">30</option><option value="50">50</option><option value="9999">Tout</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Heure</th><th>Membre</th><th>Action</th><th>Résultat</th><th>Groupe</th><th>Gain</th><th></th></tr></thead>
+        <tbody id="rowsBody"></tbody>
+      </table>
+    </div>
+  `;
+
+  const [membresSnap, actionsDispoSnap] = await Promise.all([
+    db.ref("membres").get(), db.ref("actions_dispo").get(),
+  ]);
+  MEMBRES = membresSnap.val() || {};
+  ACTIONS_DISPO = actionsDispoSnap.val() || {};
+
+  const selMembre = document.getElementById("fMembre");
+  const filtreMembreSel = document.getElementById("filtreMembre");
+  const coeqSel = document.getElementById("fCoequipiers");
+  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false).forEach(([id, m]) => {
+    const label = `${m.prenom} ${m.nom}`;
+    selMembre.innerHTML += `<option value="${id}" ${id === SESSION.id ? "selected" : ""}>${label}</option>`;
+    filtreMembreSel.innerHTML += `<option value="${id}">${label}</option>`;
+    coeqSel.innerHTML += `<option value="${id}">${label}</option>`;
+  });
+
+  const selAction = document.getElementById("fAction");
+  const filtreActionSel = document.getElementById("filtreAction");
+  // Labo exclu de la liste d'actions
+  Object.entries(ACTIONS_DISPO).filter(([id, a]) => slugify(a.nom) !== "labo").forEach(([id, a]) => {
+    selAction.innerHTML += `<option value="${id}">${a.nom}</option>`;
+    filtreActionSel.innerHTML += `<option value="${id}">${a.nom}</option>`;
+  });
+
+  selAction.addEventListener("change", () => {
+    const a = ACTIONS_DISPO[selAction.value];
+    document.getElementById("fleecaZone").style.display = (a && slugify(a.nom) === "fleeca") ? "block" : "none";
+    afficherBanniereEvent(a);
+  });
+
+  // Config event
+  const eventSnap = await db.ref("config/event").get();
+  window.EVENT = eventSnap.val();
+  function afficherBanniereEvent(action) {
+    const slot = document.getElementById("eventBannerSlot");
+    if (window.EVENT && window.EVENT.actif) {
+      slot.innerHTML = `<div class="event-banner">⚡ Événement en cours : <strong style="margin-left:4px">${window.EVENT.nom}</strong> — taux spéciaux appliqués à la paye</div>`;
+    } else slot.innerHTML = "";
+  }
+  afficherBanniereEvent(null);
+
+  // Semaine active
+  await chargerSemaine();
+
+  document.getElementById("actionForm").addEventListener("submit", ajouterAction);
+  ["filtreMembre", "filtreAction", "filtreResultat", "filtreLimite"].forEach(id =>
+    document.getElementById(id).addEventListener("change", renderRows));
+}
+
+async function chargerSemaine() {
+  const semSnap = await db.ref("semaines").orderByChild("debut").limitToLast(1).get();
+  const semaines = semSnap.val() || {};
+  SEM_ID = Object.keys(semaines)[0] || null;
+  SEMAINE = SEM_ID ? semaines[SEM_ID] : null;
+  document.getElementById("semaineLabel").textContent = SEMAINE ? `Semaine active : ${SEMAINE.nom}` : "Semaine active : aucune semaine en cours";
+  if (SEM_ID) ecouterActionsEnDirect();
+}
+
+function ecouterActionsEnDirect() {
+  db.ref("actions/" + SEM_ID).on("value", (snap) => {
+    TOUTES_ACTIONS = snap.val() || {};
+    renderRows();
+  });
+}
+
+function renderRows() {
+  const fm = document.getElementById("filtreMembre").value;
+  const fa = document.getElementById("filtreAction").value;
+  const fr = document.getElementById("filtreResultat").value;
+  const fl = Number(document.getElementById("filtreLimite").value);
+
+  let rows = Object.entries(TOUTES_ACTIONS).map(([id, a]) => ({ id, ...a }));
+  if (fm) rows = rows.filter(a => a.membre_id === fm || (a.coequipiers || []).includes(fm));
+  if (fa) rows = rows.filter(a => a.action_id === fa);
+  if (fr) rows = rows.filter(a => a.resultat === fr);
+  rows.sort((a, b) => b.createdAt - a.createdAt);
+  rows = rows.slice(0, fl);
+
+  const tbody = document.getElementById("rowsBody");
+  if (!rows.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Aucune action enregistrée.</td></tr>`; return; }
+
+  tbody.innerHTML = rows.map(a => {
+    const heure = new Date(a.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const membre = MEMBRES[a.membre_id] ? `${MEMBRES[a.membre_id].prenom} ${MEMBRES[a.membre_id].nom}` : "?";
+    const gain = (Number(a.montant_sale) || 0) + (Number(a.montant_propre) || 0);
+    const peutSupprimer = SESSION.role === "admin" || a.membre_id === SESSION.id;
+    return `<tr>
+      <td class="mono text-dim">${heure}</td>
+      <td>${membre}${(a.coequipiers && a.coequipiers.length) ? ` <span class="text-dim">+${a.coequipiers.length}</span>` : ""}</td>
+      <td>${a.action_nom}</td>
+      <td><span class="badge ${a.resultat === "Réussite" ? "badge-ok" : "badge-fail"}">${a.resultat}</span></td>
+      <td class="text-dim">${a.groupe || "-"}</td>
+      <td class="mono text-gold">${gain ? fmtArgent(gain) : "-"}</td>
+      <td>${peutSupprimer ? `<button class="btn-ghost btn-sm" onclick="supprimerAction('${a.id}')">Suppr.</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function ajouterAction(e) {
+  e.preventDefault();
+  if (!SEM_ID) { alert("Aucune semaine active — contacte un administrateur."); return; }
+
+  const membreId = document.getElementById("fMembre").value;
+  const actionId = document.getElementById("fAction").value;
+  const resultat = document.getElementById("fResultat").value;
+  const groupe = document.getElementById("fGroupe").value.trim();
+  const action = ACTIONS_DISPO[actionId];
+  const estFleeca = slugify(action.nom) === "fleeca";
+  const coequipiers = estFleeca ? Array.from(document.getElementById("fCoequipiers").selectedOptions).map(o => o.value) : [];
+
+  let montant = 0;
+  if (resultat === "Réussite") {
+    montant = Number(action.montant) || 0;
+    if (estFleeca && coequipiers.length) montant = Math.round(montant / (coequipiers.length + 1));
+  }
+
+  const record = {
+    membre_id: membreId,
+    action_id: actionId,
+    action_nom: action.nom,
+    resultat,
+    groupe: groupe || "",
+    coequipiers,
+    montant_sale: montant,
+    montant_propre: 0,
+    createdAt: Date.now(),
+  };
+
+  await db.ref("actions/" + SEM_ID).push(record);
+  if (montant > 0) {
+    await db.ref("membres/" + membreId + "/solde_sale").transaction(cur => (cur || 0) + montant);
+  }
+  logAudit("Action ajoutée", `${action.nom} — ${resultat} — ${MEMBRES[membreId]?.prenom || "?"}`);
+
+  document.getElementById("fGroupe").value = "";
+  if (resultat === "Réussite") verifierQuotaEtAlerter(membreId, SEM_ID);
+}
+
+async function supprimerAction(actionId) {
+  if (!confirm("Supprimer cette action ?")) return;
+  const a = TOUTES_ACTIONS[actionId];
+  if (a) {
+    const montant = (Number(a.montant_sale) || 0) + (Number(a.montant_propre) || 0);
+    if (montant > 0) await db.ref("membres/" + a.membre_id + "/solde_sale").transaction(cur => (cur || 0) - montant);
+    logAudit("Action supprimée", `${a.action_nom} — ${MEMBRES[a.membre_id]?.prenom || "?"}`);
+  }
+  await db.ref("actions/" + SEM_ID + "/" + actionId).remove();
+}
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BMF — Taxes</title>
+<link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="../js/firebase-config.js"></script>
+<script src="../js/app.js"></script>
+<script>
+let MEMBRES = {}, TYPES_TAXES = {};
+
+async function boot() {
+  const session = await initShell("taxes");
+  if (!session) return;
+  window.SESSION = session;
+
+  const content = document.getElementById("pageContent");
+  content.innerHTML = `
+    <div class="page-head"><div><h1>Taxes</h1><div class="page-sub">Paiement de zone et suivi des codes</div></div></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3>Payer une taxe</h3>
+      <form id="taxeForm">
+        <div class="form-row">
+          <div class="field"><label>Zone de taxe</label><select id="fZone" required></select></div>
+          <div class="field"><label>Membre</label><select id="fMembre" required></select></div>
+          <div class="field"><label>Code à donner (optionnel)</label><input type="text" id="fCode" placeholder="Auto-généré si vide"/></div>
+        </div>
+        <button type="submit" class="btn">Payer la taxe</button>
+      </form>
+    </div>
+
+    <div class="crest-divider">${svgIcon("coin","")}</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Zone</th><th>Membre</th><th>Code</th><th>Payée le</th><th>Expire le</th><th>Statut</th></tr></thead>
+        <tbody id="rowsBody"></tbody>
+      </table>
+    </div>
+  `;
+
+  const [membresSnap, typesSnap] = await Promise.all([db.ref("membres").get(), db.ref("types_taxes").get()]);
+  MEMBRES = membresSnap.val() || {};
+  TYPES_TAXES = typesSnap.val() || {};
+
+  const zoneSel = document.getElementById("fZone");
+  Object.entries(TYPES_TAXES).forEach(([id, t]) => zoneSel.innerHTML += `<option value="${id}">${t.nom}</option>`);
+  if (!Object.keys(TYPES_TAXES).length) zoneSel.innerHTML = `<option value="">Aucune zone configurée (Admin → Config)</option>`;
+
+  const membreSel = document.getElementById("fMembre");
+  Object.entries(MEMBRES).filter(([,m]) => m.actif !== false).forEach(([id, m]) => {
+    membreSel.innerHTML += `<option value="${id}" ${id === SESSION.id ? "selected" : ""}>${m.prenom} ${m.nom}</option>`;
+  });
+
+  document.getElementById("taxeForm").addEventListener("submit", payerTaxe);
+
+  db.ref("taxes").on("value", (snap) => { renderRows(snap.val() || {}); });
+}
+
+async function payerTaxe(e) {
+  e.preventDefault();
+  const zoneId = document.getElementById("fZone").value;
+  if (!zoneId) return;
+  const membreId = document.getElementById("fMembre").value;
+  let code = document.getElementById("fCode").value.trim();
+  if (!code) code = Math.random().toString(36).slice(2, 8).toUpperCase();
+
+  const now = Date.now();
+  const record = {
+    zone: TYPES_TAXES[zoneId].nom,
+    zone_id: zoneId,
+    membre_id: membreId,
+    code,
+    createdAt: now,
+    expireAt: now + 7 * 24 * 3600 * 1000,
+  };
+  await db.ref("taxes").push(record);
+  logAudit("Taxe payée", `${record.zone} — code ${code} — ${MEMBRES[membreId]?.prenom || "?"}`);
+  document.getElementById("fCode").value = "";
+}
+
+function renderRows(taxes) {
+  const rows = Object.entries(taxes).map(([id, t]) => ({ id, ...t })).sort((a, b) => b.createdAt - a.createdAt);
+  const tbody = document.getElementById("rowsBody");
+  if (!rows.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Aucune taxe payée.</td></tr>`; return; }
+  const now = Date.now();
+  tbody.innerHTML = rows.map(t => {
+    const membre = MEMBRES[t.membre_id] ? `${MEMBRES[t.membre_id].prenom} ${MEMBRES[t.membre_id].nom}` : "?";
+    const active = t.expireAt > now;
+    return `<tr>
+      <td>${t.zone}</td>
+      <td>${membre}</td>
+      <td class="mono text-gold">${t.code}</td>
+      <td class="text-dim">${new Date(t.createdAt).toLocaleString("fr-FR")}</td>
+      <td class="text-dim">${new Date(t.expireAt).toLocaleString("fr-FR")}</td>
+      <td><span class="badge ${active ? "badge-ok" : "badge-neutral"}">${active ? "Active" : "Expirée"}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+boot();
+</script>
+</body>
+</html>
