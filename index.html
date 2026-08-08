@@ -16,8 +16,8 @@
 
   <form id="loginForm">
     <div class="field">
-      <label for="loginId">Identifiant (prénom_nom)</label>
-      <input type="text" id="loginId" autocomplete="username" required/>
+      <label for="loginId">Membre</label>
+      <select id="loginId" required><option value="">Chargement…</option></select>
     </div>
     <div class="field">
       <label for="loginPass">Mot de passe</label>
@@ -79,8 +79,9 @@
     e.preventDefault();
     const errEl = document.getElementById("loginError");
     errEl.textContent = "";
-    const id = slugify(document.getElementById("loginId").value);
+    const id = document.getElementById("loginId").value;
     const pass = document.getElementById("loginPass").value;
+    if (!id) { errEl.textContent = "Sélectionne ton nom."; return; }
 
     await authReady;
     try {
@@ -99,8 +100,8 @@
 
   document.getElementById("forgotLink").addEventListener("click", async (e) => {
     e.preventDefault();
-    const id = slugify(prompt("Ton identifiant (prénom_nom) :") || "");
-    if (!id) return;
+    const id = document.getElementById("loginId").value;
+    if (!id) { alert("Sélectionne d'abord ton nom dans la liste."); return; }
     await authReady;
     const snap = await db.ref("membres/" + id).get();
     if (!snap.exists()) { alert("Identifiant inconnu."); return; }
@@ -109,6 +110,21 @@
     });
     alert("Demande envoyée. Un administrateur va réinitialiser ton mot de passe.");
   });
+
+  (async function chargerMembres() {
+    await authReady;
+    const sel = document.getElementById("loginId");
+    try {
+      const snap = await db.ref("membres").get();
+      const membres = snap.val() || {};
+      const actifs = Object.entries(membres).filter(([, m]) => m.actif !== false);
+      sel.innerHTML = `<option value="">— Sélectionne ton nom —</option>` +
+        actifs.sort((a, b) => (a[1].prenom + a[1].nom).localeCompare(b[1].prenom + b[1].nom))
+          .map(([id, m]) => `<option value="${id}">${m.prenom} ${m.nom}</option>`).join("");
+    } catch (e) {
+      sel.innerHTML = `<option value="">Erreur de chargement</option>`;
+    }
+  })();
 </script>
 </body>
 </html>
