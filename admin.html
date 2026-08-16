@@ -67,7 +67,13 @@ async function renderSemaines() {
     </div>
     <div id="semainesList"></div>`;
   document.getElementById("btnCreerSemaine").addEventListener("click", async () => {
-    await creerSemaine();
+    try {
+      const id = await creerSemaine();
+      if (!id) { alert("Impossible de créer la semaine (réessaie)."); return; }
+    } catch (e) {
+      console.error(e);
+      alert("Erreur lors de la création : " + (e.message || e));
+    }
     renderSemaines();
   });
 

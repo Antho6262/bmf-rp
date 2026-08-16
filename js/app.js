@@ -141,7 +141,7 @@ async function initShell(activePage) {
   });
 
   injectGlobalSearch(s, prefix);
-  ensureSemaineAuto();
+  await ensureSemaineAuto();
   setInterval(ensureSemaineAuto, 60000);
 
   return s;
@@ -175,9 +175,16 @@ async function ensureSemaineAuto() {
 
 async function creerSemaineAvecBornes(debut, fin, verrouAt, manuel) {
   const lockRef = db.ref("semaine_index/" + debut);
-  // Transaction anti-doublon : si le créneau est déjà pris, on abandonne (return undefined = abort)
-  const res = await lockRef.transaction((cur) => (cur === null ? "LOCKED" : undefined));
-  if (!res.committed) return null;
+  const lockSnap = await lockRef.get();
+  if (lockSnap.exists()) {
+    const existingId = lockSnap.val();
+    if (existingId && existingId !== "LOCKED") {
+      const semSnap = await db.ref("semaines/" + existingId).get();
+      if (semSnap.exists()) return existingId; // déjà créée -> idempotent, pas de doublon
+    }
+    // Verrou orphelin (écriture précédente incomplète) -> on le libère et on repart proprement
+    await lockRef.remove();
+  }
   const id = uid();
   const nom = nomSemaine(debut, fin);
   await db.ref("semaines/" + id).set({
