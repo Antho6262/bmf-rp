@@ -133,6 +133,7 @@ async function boot() {
     }
     afficherBanniereEvent(a);
   });
+  selAction.dispatchEvent(new Event("change")); // applique l'état initial (l'action pré-sélectionnée peut être Fleeca/Drogue)
 
   // Config event
   const eventSnap = await db.ref("config/event").get();
