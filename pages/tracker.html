@@ -54,6 +54,10 @@ async function boot() {
           <label>Drogue vendue</label>
           <select id="fProduit"></select>
         </div>
+        <div id="quantiteZone" class="field" style="display:none;">
+          <label>Quantité vendue</label>
+          <input type="number" id="fQuantite" min="1" step="1" value="1"/>
+        </div>
         <div class="field">
           <label>Groupe (optionnel)</label>
           <input type="text" id="fGroupe" placeholder="Nom du groupe payé"/>
@@ -120,10 +124,12 @@ async function boot() {
     document.getElementById("fleecaZone").style.display = (a && slugify(a.nom) === "fleeca") ? "block" : "none";
     const estDrogue = a && a.categorie === "drogue";
     document.getElementById("drogueZone").style.display = estDrogue ? "block" : "none";
+    document.getElementById("quantiteZone").style.display = estDrogue ? "block" : "none";
     if (estDrogue) {
       const prodSel = document.getElementById("fProduit");
       prodSel.innerHTML = Object.entries(QUOTAS_CAT).map(([id, c]) => `<option value="${id}">${c.nom}</option>`).join("")
         || `<option value="">Aucune drogue configurée (Admin → Quotas)</option>`;
+      document.getElementById("fQuantite").value = 1;
     }
     afficherBanniereEvent(a);
   });
@@ -211,21 +217,23 @@ async function ajouterAction(e) {
   const produitId = estDrogue ? document.getElementById("fProduit").value : "";
   if (estDrogue && !produitId) { alert("Sélectionne la drogue vendue."); return; }
   const produitNom = estDrogue && produitId ? (QUOTAS_CAT[produitId] ? QUOTAS_CAT[produitId].nom : "") : "";
+  const quantite = estDrogue ? Math.max(1, Number(document.getElementById("fQuantite").value) || 1) : 1;
 
   let montant = 0;
   if (resultat === "Réussite") {
     const base = Number(action.montant) || 0;
     const taux = estDrogue ? (window.TAUX_DROGUE ?? 100) : (window.TAUX_ACTIONS ?? 100);
-    montant = Math.round(base * (taux / 100));
+    montant = Math.round(base * (taux / 100)) * quantite;
     if (estFleeca && coequipiers.length) montant = Math.round(montant / (coequipiers.length + 1));
   }
 
   const record = {
     membre_id: membreId,
     action_id: actionId,
-    action_nom: action.nom + (produitNom ? " — " + produitNom : ""),
+    action_nom: action.nom + (produitNom ? ` — ${produitNom}${quantite > 1 ? " x" + quantite : ""}` : ""),
     categorie: action.categorie || "action",
     produit_id: produitId || "",
+    quantite,
     resultat,
     groupe: groupe || "",
     coequipiers,
@@ -241,6 +249,7 @@ async function ajouterAction(e) {
   logAudit("Action ajoutée", `${action.nom} — ${resultat} — ${MEMBRES[membreId]?.prenom || "?"}`);
 
   document.getElementById("fGroupe").value = "";
+  document.getElementById("fQuantite").value = 1;
   if (resultat === "Réussite") verifierQuotaEtAlerter(membreId, SEM_ID);
 }
 

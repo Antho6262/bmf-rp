@@ -381,7 +381,7 @@ async function verifierQuotaEtAlerter(membreId, semaineId) {
     for (const [catId, cat] of Object.entries(quotasCat)) {
       const quotaMembre = membre.quotas_categorie ? membre.quotas_categorie[catId] : null;
       if (!quotaMembre) continue;
-      const count = mesActions.filter(a => a.produit_id === catId).length;
+      const count = mesActions.filter(a => a.produit_id === catId).reduce((s, a) => s + (Number(a.quantite) || 1), 0);
       if (!marqueurs[catId] && count >= quotaMembre) {
         await db.ref(`semaines/${semaineId}/quota_alertes/${membreId}/${catId}`).set(true);
         envoyerWebhookEmbed(webhook, {

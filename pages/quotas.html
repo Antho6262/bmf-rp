@@ -56,7 +56,7 @@ async function boot() {
   Object.entries(cats).forEach(([catId, cat]) => {
     const quota = (session.quotas_categorie && session.quotas_categorie[catId]) || 0;
     if (!quota) return;
-    const count = mesActions.filter(a => a.produit_id === catId).length;
+    const count = mesActions.filter(a => a.produit_id === catId).reduce((s, a) => s + (Number(a.quantite) || 1), 0);
     lignes.push(barre(cat.nom, count, quota));
   });
 
