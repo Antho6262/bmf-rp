@@ -58,6 +58,12 @@ async function boot() {
           <label>Quantité vendue</label>
           <input type="number" id="fQuantite" min="1" step="1" value="1"/>
         </div>
+        <div class="form-row">
+          <div class="field"><label>Montant gagné</label><input type="number" id="fMontant" min="0" step="1" value="0"/></div>
+          <div class="field"><label>Type d'argent</label>
+            <select id="fTypeArgent"><option value="sale" selected>Sale</option><option value="propre">Propre</option></select>
+          </div>
+        </div>
         <div class="field">
           <label>Groupe (optionnel)</label>
           <input type="text" id="fGroupe" placeholder="Nom du groupe payé"/>
@@ -132,8 +138,30 @@ async function boot() {
       document.getElementById("fQuantite").value = 1;
     }
     afficherBanniereEvent(a);
+    suggererMontant();
   });
   selAction.dispatchEvent(new Event("change")); // applique l'état initial (l'action pré-sélectionnée peut être Fleeca/Drogue)
+
+  document.getElementById("fResultat").addEventListener("change", suggererMontant);
+  document.getElementById("fQuantite").addEventListener("input", suggererMontant);
+  document.getElementById("fCoequipiers").addEventListener("change", suggererMontant);
+
+  function suggererMontant() {
+    const a = ACTIONS_DISPO[selAction.value];
+    const resultat = document.getElementById("fResultat").value;
+    const fMontant = document.getElementById("fMontant");
+    if (!a || resultat !== "Réussite") { fMontant.value = 0; return; }
+    const estDrogue = a.categorie === "drogue";
+    const estFleeca = slugify(a.nom) === "fleeca";
+    const quantite = estDrogue ? Math.max(1, Number(document.getElementById("fQuantite").value) || 1) : 1;
+    const taux = estDrogue ? (window.TAUX_DROGUE ?? 100) : (window.TAUX_ACTIONS ?? 100);
+    let montant = Math.round((Number(a.montant) || 0) * (taux / 100)) * quantite;
+    if (estFleeca) {
+      const nbCoeq = document.getElementById("fCoequipiers").selectedOptions.length;
+      if (nbCoeq) montant = Math.round(montant / (nbCoeq + 1));
+    }
+    fMontant.value = montant;
+  }
 
   // Config event
   const eventSnap = await db.ref("config/event").get();
@@ -220,13 +248,10 @@ async function ajouterAction(e) {
   const produitNom = estDrogue && produitId ? (QUOTAS_CAT[produitId] ? QUOTAS_CAT[produitId].nom : "") : "";
   const quantite = estDrogue ? Math.max(1, Number(document.getElementById("fQuantite").value) || 1) : 1;
 
-  let montant = 0;
-  if (resultat === "Réussite") {
-    const base = Number(action.montant) || 0;
-    const taux = estDrogue ? (window.TAUX_DROGUE ?? 100) : (window.TAUX_ACTIONS ?? 100);
-    montant = Math.round(base * (taux / 100)) * quantite;
-    if (estFleeca && coequipiers.length) montant = Math.round(montant / (coequipiers.length + 1));
-  }
+  const montantSaisi = Math.max(0, Number(document.getElementById("fMontant").value) || 0);
+  const typeArgent = document.getElementById("fTypeArgent").value; // "sale" | "propre"
+  const montantSale = resultat === "Réussite" && typeArgent === "sale" ? montantSaisi : 0;
+  const montantPropre = resultat === "Réussite" && typeArgent === "propre" ? montantSaisi : 0;
 
   const record = {
     membre_id: membreId,
@@ -238,19 +263,19 @@ async function ajouterAction(e) {
     resultat,
     groupe: groupe || "",
     coequipiers,
-    montant_sale: montant,
-    montant_propre: 0,
+    montant_sale: montantSale,
+    montant_propre: montantPropre,
     createdAt: Date.now(),
   };
 
   await db.ref("actions/" + SEM_ID).push(record);
-  if (montant > 0) {
-    await db.ref("membres/" + membreId + "/solde_sale").transaction(cur => (cur || 0) + montant);
-  }
+  if (montantSale > 0) await db.ref("membres/" + membreId + "/solde_sale").transaction(cur => (cur || 0) + montantSale);
+  if (montantPropre > 0) await db.ref("membres/" + membreId + "/solde_propre").transaction(cur => (cur || 0) + montantPropre);
   logAudit("Action ajoutée", `${action.nom} — ${resultat} — ${MEMBRES[membreId]?.prenom || "?"}`);
 
   document.getElementById("fGroupe").value = "";
   document.getElementById("fQuantite").value = 1;
+  suggererMontant();
   if (resultat === "Réussite") verifierQuotaEtAlerter(membreId, SEM_ID);
 }
 
@@ -258,8 +283,8 @@ async function supprimerAction(actionId) {
   if (!confirm("Supprimer cette action ?")) return;
   const a = TOUTES_ACTIONS[actionId];
   if (a) {
-    const montant = (Number(a.montant_sale) || 0) + (Number(a.montant_propre) || 0);
-    if (montant > 0) await db.ref("membres/" + a.membre_id + "/solde_sale").transaction(cur => (cur || 0) - montant);
+    if (Number(a.montant_sale) > 0) await db.ref("membres/" + a.membre_id + "/solde_sale").transaction(cur => (cur || 0) - Number(a.montant_sale));
+    if (Number(a.montant_propre) > 0) await db.ref("membres/" + a.membre_id + "/solde_propre").transaction(cur => (cur || 0) - Number(a.montant_propre));
     logAudit("Action supprimée", `${a.action_nom} — ${MEMBRES[a.membre_id]?.prenom || "?"}`);
   }
   await db.ref("actions/" + SEM_ID + "/" + actionId).remove();
